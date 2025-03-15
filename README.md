@@ -133,8 +133,8 @@ python main.py
 
 ## 🔍 Future Improvements
 - Incorporate **advanced features** such as player stats, ELO ratings, or betting odds.
-- Explore **deep learning models** like LSTMs for time-series predictions.
 - Tune hyperparameters further with **Bayesian optimization**.
+- Try sigmoid transformation of the label data
 
 ---
 
