@@ -10,6 +10,7 @@ import numpy as np
 from sklearn.metrics import mean_absolute_error
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.decomposition import PCA
 import joblib
 """
 first year of data is 2003
@@ -109,6 +110,12 @@ def main():
         final_dataset.to_csv('ncaadata/training_data.csv',index=False)
     else:
         final_dataset = pd.read_csv('ncaadata/training_data.csv')
+        # df_swapped = utils.swap_team_features(final_dataset)
+        # X = df_swapped.drop(columns=['team_0','team_1'])
+        # print(f'before pca: {X.shape}')
+        # X = PCA(n_components=0.95).fit_transform(X)
+        # print(f'after pca: {X.shape}')
+        # exit()
 
     #ML analysis
     if not os.path.exists('models/regression_model.joblib'):
@@ -148,7 +155,7 @@ def main():
         study.optimize(objective, n_trials=50)
 
         best_params = study.best_trial.params
-        final_model = xgb.XGBRegressor(**best_params,early_stopping_rounds=20)
+        final_model = xgb.XGBRegressor(**best_params,early_stopping_rounds=6)
 
         final_model.fit(X_train, y_train, eval_set=[(X_train, y_train), (X_test, y_test)], 
                         verbose=True)
@@ -173,6 +180,20 @@ def main():
         plt.legend()
         os.makedirs('figures',exist_ok=True)
         plt.savefig('figures/training_curve.png')
+
+        #feature importance
+        importance = final_model.get_booster().get_score(importance_type="weight")
+        sorted_importance = sorted(importance.items(), key=lambda x: x[1], reverse=True)
+        features, scores = zip(*sorted_importance[:20])
+
+        plt.figure(figsize=(20, 8))
+        plt.barh(features, scores, color="skyblue")
+        plt.xlabel("Feature Importance Score")
+        plt.ylabel("Features")
+        #highest on top
+        plt.gca().invert_yaxis()
+        plt.savefig('figures/feature_importance.png', bbox_inches='tight')
+        plt.close()
     else:
         final_model = joblib.load('models/regression_model.joblib')
 
@@ -248,8 +269,8 @@ def main():
     ################### predictions this season ############################
     team_mapping_df = pd.read_csv('ncaadata/MTeamSpellings.csv')
     curr_season = reg_season[reg_season['Season'] == 2025]
-    team_1_name, team_0_name = 'georgia', 'memphis'
-    seed_winner, seed_loser = 9, 8
+    team_1_name, team_0_name = 'virginia commonwealth', 'illinois'
+    seed_winner, seed_loser = 11, 6
     team_1_id = team_mapping_df[team_mapping_df['TeamNameSpelling'] == team_1_name]['TeamID'].values[0]
     team_0_id = team_mapping_df[team_mapping_df['TeamNameSpelling'] == team_0_name]['TeamID'].values[0]
 
