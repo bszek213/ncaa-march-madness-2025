@@ -42,3 +42,12 @@ def swap_team_features(df):
     
     #concat original and swapped dataframes
     return pd.concat([df, df_swapped], ignore_index=True)
+
+def add_noise_to_features(features_df, noise_scale=1):
+    columns_to_exclude = [col for col in features_df.columns if 'seed' in col or 'conference' in col]
+    features_with_noise = features_df.drop(columns=columns_to_exclude)
+    features_without_noise = features_df[columns_to_exclude]
+    noise = np.random.normal(0, noise_scale, features_with_noise.shape)
+    noisy_features = features_with_noise + noise
+    noisy_features = pd.concat([noisy_features, features_without_noise], axis=1)
+    return noisy_features

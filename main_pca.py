@@ -50,7 +50,7 @@ def get_team_stats(team_mapping_df, conference_df, team_name, season, seed):
     team_stats['seed'] = seed
     return team_stats
 
-def predict_bracket(matchups, team_mapping_df, reg_season, conference_df, final_model, region):
+def predict_bracket(matchups, team_mapping_df, reg_season, conference_df, final_model, pca_inst, min_max, region):
     os.makedirs('results',exist_ok=True)
     round_val = 1
     while len(matchups) > 1:
@@ -66,7 +66,11 @@ def predict_bracket(matchups, team_mapping_df, reg_season, conference_df, final_
             team_1_stats = get_team_stats(team_mapping_df, conference_df, left[0], reg_season, left[2]).add_suffix('_team_1')
             team_0_stats = get_team_stats(team_mapping_df, conference_df, left[1], reg_season, left[3]).add_suffix('_team_0')
             curr_matchup = pd.concat([team_1_stats, team_0_stats], axis=1)
-            team_1_pred = final_model.predict(curr_matchup.to_numpy())[0]
+            # print(curr_matchup)
+            # print(curr_matchup[min_max.feature_names_in_])
+            # input()
+            curr_matchup = pca_inst.transform(min_max.transform(curr_matchup))
+            team_1_pred = final_model.predict(curr_matchup)[0]
             (winner_left, seed_left) = (left[0], left[2]) if team_1_pred > 0.5 else (left[1], left[3])
             left_list.append((winner_left, seed_left))
             
@@ -74,7 +78,8 @@ def predict_bracket(matchups, team_mapping_df, reg_season, conference_df, final_
             team_1_stats = get_team_stats(team_mapping_df, conference_df, right[0], reg_season, right[2]).add_suffix('_team_1')
             team_0_stats = get_team_stats(team_mapping_df, conference_df, right[1], reg_season, right[3]).add_suffix('_team_0')
             curr_matchup = pd.concat([team_1_stats, team_0_stats], axis=1)
-            team_1_pred = final_model.predict(curr_matchup.to_numpy())[0]
+            curr_matchup = pca_inst.transform(min_max.transform(curr_matchup))
+            team_1_pred = final_model.predict(curr_matchup)[0]
             (winner_right, seed_right) = (right[0], right[2]) if team_1_pred > 0.5 else (right[1], right[3])
             right_list.append((winner_right, seed_right))
         #construct new matchup list
@@ -91,7 +96,7 @@ def predict_bracket(matchups, team_mapping_df, reg_season, conference_df, final_
         else:
              matchups.append((left_list[0][0],right_list[0][0],left_list[0][1],right_list[0][1]))
         #save round data
-        with open(f'results/{region}_round_{round_val}.txt', 'w') as file:
+        with open(f'results/{region}_round_{round_val}_pca.txt', 'w') as file:
                 for matchup in matchups:
                     file.write(f"{matchup[0]} vs {matchup[1]}\n")
         round_val += 1
@@ -101,9 +106,10 @@ def predict_bracket(matchups, team_mapping_df, reg_season, conference_df, final_
     team_0_stats = get_team_stats(team_mapping_df, conference_df, matchups[0][1], reg_season, matchups[0][3]).add_suffix('_team_0')
     curr_matchup = pd.concat([team_1_stats, team_0_stats], axis=1)
     
-    team_1_pred = final_model.predict(curr_matchup.to_numpy())[0]
+    curr_matchup = pca_inst.transform(min_max.transform(curr_matchup))
+    team_1_pred = final_model.predict(curr_matchup)[0]
     (winner_region, seed_region) = (matchups[0][0], matchups[0][2]) if team_1_pred > 0.5 else (matchups[0][1], matchups[0][3])
-    with open(f'results/{region}_winner.txt', 'w') as file:
+    with open(f'results/{region}_winner_pca.txt', 'w') as file:
         for matchup in matchups:
             file.write(f"{winner_region}\n")
     return (winner_region, seed_region)
@@ -193,7 +199,7 @@ def main():
         # exit()
 
     #ML analysis
-    if not os.path.exists('models/regression_model.joblib'):
+    if not os.path.exists('models/regression_model_pca.joblib'):
         df_swapped = utils.swap_team_features(final_dataset)
         #create regression labels
         # #create one hot encoded data
@@ -201,7 +207,15 @@ def main():
         y = create_regression_labels(df_swapped)
         X = df_swapped.drop(columns=['team_0','team_1'])
 
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+        #min max before pca
+        min_max = MinMaxScaler(feature_range=(0,1))
+        X_min_max = min_max.fit_transform(X)
+        pca_inst = PCA(n_components=0.975)
+        x_pca = pca_inst.fit_transform(X_min_max)
+        X_train, X_test, y_train, y_test = train_test_split(x_pca, y, test_size=0.2)
+
+        joblib.dump(min_max,'models/min_max.joblib')
+        joblib.dump(pca_inst,'models/pca.joblib')
 
         # #dumb
         # y_train = np.argmax(y_train, axis=1)
@@ -230,12 +244,12 @@ def main():
         study.optimize(objective, n_trials=50)
 
         best_params = study.best_trial.params
-        final_model = xgb.XGBRegressor(**best_params,early_stopping_rounds=6)
+        final_model = xgb.XGBRegressor(**best_params,early_stopping_rounds=12)
 
         final_model.fit(X_train, y_train, eval_set=[(X_train, y_train), (X_test, y_test)], 
                         verbose=True)
         os.makedirs('models',exist_ok=True)
-        joblib.dump(final_model,'models/regression_model.joblib')
+        joblib.dump(final_model,'models/regression_model_pca.joblib')
         results = final_model.evals_result()
         # Evaluate model
         y_pred = final_model.predict(X_test)
@@ -254,7 +268,7 @@ def main():
         plt.title('Training and Validation rmse over Epochs')
         plt.legend()
         os.makedirs('figures',exist_ok=True)
-        plt.savefig('figures/training_curve.png')
+        plt.savefig('figures/training_curve_pca.png')
 
         #feature importance
         importance = final_model.get_booster().get_score(importance_type="weight")
@@ -267,10 +281,12 @@ def main():
         plt.ylabel("Features")
         #highest on top
         plt.gca().invert_yaxis()
-        plt.savefig('figures/feature_importance.png', bbox_inches='tight')
+        plt.savefig('figures/feature_importance_pca.png', bbox_inches='tight')
         plt.close()
     else:
-        final_model = joblib.load('models/regression_model.joblib')
+        final_model = joblib.load('models/regression_model_pca.joblib')
+        min_max = joblib.load('models/min_max.joblib')
+        pca_inst = joblib.load('models/pca.joblib')
 
     #predictions - past
     run_hist = False
@@ -330,6 +346,9 @@ def main():
             team_stats_final_loser = team_stats_final_loser.add_suffix('_team_0')
 
             curr_matchup = pd.concat([team_stats_final_winner,team_stats_final_loser],axis=1)
+
+            #transform
+            curr_matchup = pca_inst.transform(min_max.transform(curr_matchup))
 
             actual = 1 if curr_w_score > curr_l_score else 0
             predict = final_model.predict(curr_matchup)
@@ -396,7 +415,7 @@ def main():
         ('michigan state', 'bryant', 2, 15),
     ]
 
-    south_winner = predict_bracket(south_region, team_mapping_df, curr_season, conference_df, final_model, 'south')
+    south_winner = predict_bracket(south_region, team_mapping_df, curr_season, conference_df, final_model, pca_inst, min_max, 'south')
     
     east_region = [
         # East Region (Duke No. 1)
@@ -409,7 +428,7 @@ def main():
         ("saint mary's", 'vanderbilt', 7, 10),
         ("alabama", 'robert morris', 2, 15),
     ]
-    east_winner = predict_bracket(east_region, team_mapping_df, curr_season, conference_df, final_model, 'east')
+    east_winner = predict_bracket(east_region, team_mapping_df, curr_season, conference_df, final_model, pca_inst, min_max, 'east')
     west_region = [
         # West Region (Florida No. 1)
         ('florida', 'norfolk state', 1, 16),
@@ -421,7 +440,7 @@ def main():
         ('kansas', 'arkansas', 7, 10),
         ("st john's", 'nebraska-omaha', 2, 15),
     ]
-    west_winner = predict_bracket(west_region, team_mapping_df, curr_season, conference_df, final_model, 'west')
+    west_winner = predict_bracket(west_region, team_mapping_df, curr_season, conference_df, final_model, pca_inst, min_max, 'west')
 
     midwest_region = [
         # Midwest Region (Houston No. 1)
@@ -434,14 +453,14 @@ def main():
         ('ucla', 'utah-state', 7, 10),
         ('tennessee', 'wofford', 2, 15)
     ]
-    midwest_winner = predict_bracket(midwest_region, team_mapping_df, curr_season, conference_df, final_model, 'midwest')
+    midwest_winner = predict_bracket(midwest_region, team_mapping_df, curr_season, conference_df, final_model, pca_inst, min_max, 'midwest')
 
     #final_four
     final_four_matchup= [
         (south_winner[0],west_winner[0],south_winner[1],west_winner[1]),
         (east_winner[0],midwest_winner[0],east_winner[1],midwest_winner[1])
     ]
-    overall_winner = predict_bracket(final_four_matchup, team_mapping_df, curr_season, conference_df, final_model, 'Final_four')
+    overall_winner = predict_bracket(final_four_matchup, team_mapping_df, curr_season, conference_df, final_model, pca_inst, min_max, 'Final_four')
     print(f'Overall Winner: {overall_winner}')
     # predict_bracket(initial_matchups, team_mapping_df, curr_season, conference_df, seed_df, final_model)
     # team_1_name, team_0_name = 'virginia commonwealth', 'illinois'
