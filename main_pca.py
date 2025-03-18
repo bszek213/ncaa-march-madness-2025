@@ -10,7 +10,7 @@ import numpy as np
 from sklearn.metrics import mean_absolute_error
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA, KernelPCA
 import joblib
 # import networkx as nx
 from tqdm import tqdm
@@ -27,12 +27,9 @@ def create_regression_labels(df):
     """
     # score_diff = (df['team_1'] - df['team_0']).values.reshape(-1, 1)
     # data_tran = MinMaxScaler(feature_range=(0,1)).fit_transform(score_diff)
-    data_tran = ((df['team_1']) / (df['team_1'] + (df['team_0']))).values.reshape(-1, 1)
-    # plt.hist(data_tran,color='red')
-    # plt.hist(df['team_0'])
-    # plt.hist(df['team_1'])
-    # plt.hist(label_scaled,color='blue',alpha=0.5)
-    # plt.show()
+    # data_tran = ((df['team_1']) / (df['team_1'] + (df['team_0']))).values.reshape(-1, 1)
+    smoothing_factor = 40
+    data_tran = ((df['team_1']) + smoothing_factor) / (((df['team_1']) + df['team_0']) + 2 * smoothing_factor)
     return data_tran
  
 def get_team_stats(team_mapping_df, conference_df, team_name, season, seed):
@@ -65,7 +62,20 @@ def predict_bracket(matchups, team_mapping_df, reg_season, conference_df, final_
             #left matchups
             team_1_stats = get_team_stats(team_mapping_df, conference_df, left[0], reg_season, left[2]).add_suffix('_team_1')
             team_0_stats = get_team_stats(team_mapping_df, conference_df, left[1], reg_season, left[3]).add_suffix('_team_0')
+
             curr_matchup = pd.concat([team_1_stats, team_0_stats], axis=1)
+            #seed diff
+            curr_matchup['seed_diff'] = abs(curr_matchup['seed_team_0'] - curr_matchup['seed_team_1'])
+
+            #upset probability
+            if curr_matchup['seed_team_0'].values > curr_matchup['seed_team_1'].values:
+                curr_matchup['upset_proba'] = utils.upset_proba(lower_seed=curr_matchup['seed_team_0'].values[0],
+                                                                higher_seed=curr_matchup['seed_team_1'].values[0])
+            else:
+                curr_matchup['upset_proba'] = utils.upset_proba(lower_seed=curr_matchup['seed_team_1'].values[0],
+                                                                higher_seed=curr_matchup['seed_team_0'].values[0])
+            curr_matchup['seed_upset_interaction'] = curr_matchup['seed_diff'] * curr_matchup['upset_proba']
+
             # print(curr_matchup)
             # print(curr_matchup[min_max.feature_names_in_])
             # input()
@@ -78,6 +88,19 @@ def predict_bracket(matchups, team_mapping_df, reg_season, conference_df, final_
             team_1_stats = get_team_stats(team_mapping_df, conference_df, right[0], reg_season, right[2]).add_suffix('_team_1')
             team_0_stats = get_team_stats(team_mapping_df, conference_df, right[1], reg_season, right[3]).add_suffix('_team_0')
             curr_matchup = pd.concat([team_1_stats, team_0_stats], axis=1)
+
+            #seed diff
+            curr_matchup['seed_diff'] = abs(curr_matchup['seed_team_0'] - curr_matchup['seed_team_1'])
+
+            #upset probability
+            if curr_matchup['seed_team_0'].values > curr_matchup['seed_team_1'].values:
+                curr_matchup['upset_proba'] = utils.upset_proba(lower_seed=curr_matchup['seed_team_0'].values[0],
+                                                                higher_seed=curr_matchup['seed_team_1'].values[0])
+            else:
+                curr_matchup['upset_proba'] = utils.upset_proba(lower_seed=curr_matchup['seed_team_1'].values[0],
+                                                                higher_seed=curr_matchup['seed_team_0'].values[0])
+            curr_matchup['seed_upset_interaction'] = curr_matchup['seed_diff'] * curr_matchup['upset_proba']
+
             curr_matchup = pca_inst.transform(min_max.transform(curr_matchup))
             team_1_pred = final_model.predict(curr_matchup)[0]
             (winner_right, seed_right) = (right[0], right[2]) if team_1_pred > 0.5 else (right[1], right[3])
@@ -105,7 +128,19 @@ def predict_bracket(matchups, team_mapping_df, reg_season, conference_df, final_
     team_1_stats = get_team_stats(team_mapping_df, conference_df, matchups[0][0], reg_season, matchups[0][2]).add_suffix('_team_1')
     team_0_stats = get_team_stats(team_mapping_df, conference_df, matchups[0][1], reg_season, matchups[0][3]).add_suffix('_team_0')
     curr_matchup = pd.concat([team_1_stats, team_0_stats], axis=1)
-    
+
+    #seed diff
+    curr_matchup['seed_diff'] = abs(curr_matchup['seed_team_0'] - curr_matchup['seed_team_1'])
+
+    #upset probability
+    if curr_matchup['seed_team_0'].values > curr_matchup['seed_team_1'].values:
+        curr_matchup['upset_proba'] = utils.upset_proba(lower_seed=curr_matchup['seed_team_0'].values[0],
+                                                        higher_seed=curr_matchup['seed_team_1'].values[0])
+    else:
+        curr_matchup['upset_proba'] = utils.upset_proba(lower_seed=curr_matchup['seed_team_1'].values[0],
+                                                        higher_seed=curr_matchup['seed_team_0'].values[0])
+    curr_matchup['seed_upset_interaction'] = curr_matchup['seed_diff'] * curr_matchup['upset_proba']
+
     curr_matchup = pca_inst.transform(min_max.transform(curr_matchup))
     team_1_pred = final_model.predict(curr_matchup)[0]
     (winner_region, seed_region) = (matchups[0][0], matchups[0][2]) if team_1_pred > 0.5 else (matchups[0][1], matchups[0][3])
@@ -187,8 +222,21 @@ def main():
                 #data agg 
                 curr_matchup = pd.concat([team_stats_final_winner,team_stats_final_loser],axis=1)
 
+                #seed diff
+                curr_matchup['seed_diff'] = abs(curr_matchup['seed_team_0'] - curr_matchup['seed_team_1'])
+
+                #upset probability
+                if curr_matchup['seed_team_0'].values > curr_matchup['seed_team_1'].values:
+                    curr_matchup['upset_proba'] = utils.upset_proba(lower_seed=curr_matchup['seed_team_0'].values[0],
+                                                                    higher_seed=curr_matchup['seed_team_1'].values[0])
+                else:
+                    curr_matchup['upset_proba'] = utils.upset_proba(lower_seed=curr_matchup['seed_team_1'].values[0],
+                                                                    higher_seed=curr_matchup['seed_team_0'].values[0])
+                curr_matchup['seed_upset_interaction'] = curr_matchup['seed_diff'] * curr_matchup['upset_proba']
+
                 final_dataset = pd.concat([final_dataset,curr_matchup])
         final_dataset.to_csv('ncaadata/training_data.csv',index=False)
+        final_dataset = pd.read_csv('ncaadata/training_data.csv')
     else:
         final_dataset = pd.read_csv('ncaadata/training_data.csv')
         # df_swapped = utils.swap_team_features(final_dataset)
@@ -210,7 +258,8 @@ def main():
         #min max before pca
         min_max = MinMaxScaler(feature_range=(0,1))
         X_min_max = min_max.fit_transform(X)
-        pca_inst = PCA(n_components=0.975)
+        pca_temp = PCA(n_components=0.975).fit(X_min_max)
+        pca_inst = KernelPCA(n_components=pca_temp.n_components_)
         x_pca = pca_inst.fit_transform(X_min_max)
         X_train, X_test, y_train, y_test = train_test_split(x_pca, y, test_size=0.2)
 
@@ -241,7 +290,7 @@ def main():
             return -np.mean(scores)
         
         study = optuna.create_study(direction="minimize")
-        study.optimize(objective, n_trials=50)
+        study.optimize(objective, n_trials=75)
 
         best_params = study.best_trial.params
         final_model = xgb.XGBRegressor(**best_params,early_stopping_rounds=12)
@@ -254,6 +303,9 @@ def main():
         # Evaluate model
         y_pred = final_model.predict(X_test)
         final_acc = mean_absolute_error(y_test, y_pred)
+
+        with open(f'models/pca_model_final_rmse.txt','w') as f:
+            f.write(f'{final_acc}')
 
         print(f"Final MAE: {final_acc:.4f}")
 
@@ -273,11 +325,11 @@ def main():
         #feature importance
         importance = final_model.get_booster().get_score(importance_type="weight")
         sorted_importance = sorted(importance.items(), key=lambda x: x[1], reverse=True)
-        features, scores = zip(*sorted_importance[:20])
-
-        plt.figure(figsize=(20, 8))
+        features, scores = zip(*sorted_importance) #[:40]
+        scores = np.array(scores) / np.sum(scores)
+        plt.figure(figsize=(10, 30))
         plt.barh(features, scores, color="skyblue")
-        plt.xlabel("Feature Importance Score")
+        plt.xlabel("Normalized Feature Importance Score")
         plt.ylabel("Features")
         #highest on top
         plt.gca().invert_yaxis()
@@ -346,6 +398,18 @@ def main():
             team_stats_final_loser = team_stats_final_loser.add_suffix('_team_0')
 
             curr_matchup = pd.concat([team_stats_final_winner,team_stats_final_loser],axis=1)
+
+            #seed diff
+            curr_matchup['seed_diff'] = abs(curr_matchup['seed_team_0'] - curr_matchup['seed_team_1'])
+
+            #upset probability
+            if curr_matchup['seed_team_0'].values > curr_matchup['seed_team_1'].values:
+                curr_matchup['upset_proba'] = utils.upset_proba(lower_seed=curr_matchup['seed_team_0'].values[0],
+                                                                higher_seed=curr_matchup['seed_team_1'].values[0])
+            else:
+                curr_matchup['upset_proba'] = utils.upset_proba(lower_seed=curr_matchup['seed_team_1'].values[0],
+                                                                higher_seed=curr_matchup['seed_team_0'].values[0])
+            curr_matchup['seed_upset_interaction'] = curr_matchup['seed_diff'] * curr_matchup['upset_proba']
 
             #transform
             curr_matchup = pca_inst.transform(min_max.transform(curr_matchup))

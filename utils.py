@@ -51,3 +51,18 @@ def add_noise_to_features(features_df, noise_scale=1):
     noisy_features = features_with_noise + noise
     noisy_features = pd.concat([noisy_features, features_without_noise], axis=1)
     return noisy_features
+
+def upset_proba(lower_seed, higher_seed):
+    """
+    The probability is based on historical matchup probabilities
+    """
+    upset_prob_map = {
+        (12, 5): 0.40,
+        (11, 6): 0.37,
+        (10, 7): 0.39,
+        (13, 4): 0.22,
+        (14, 3): 0.15,
+        (15, 2): 0.07,
+        (16, 1): 0.01
+    }
+    return upset_prob_map.get((lower_seed, higher_seed), 0.0)

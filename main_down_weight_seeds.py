@@ -22,20 +22,6 @@ first year of data is 2003
 """
 ERROR_CORRECTION = 0.0158 / 2
 
-
-def target_encode(data, feature, target, smoothing=1):
-    """
-    Target encodes a categorical feature with smoothing to prevent overfitting.
-    """
-    global_mean = target.mean()
-    conf_mean = data.groupby(feature)[target].mean()
-    conf_size = data.groupby(feature)[target].size()
-
-    # Compute the smoothed estimate
-    smoothed_mean = (conf_mean * conf_size + global_mean * smoothing) / (conf_size + smoothing)
-
-    return data[feature].map(smoothed_mean)
-
 def create_regression_labels(df):
     """
     Above 0.5: Team 1 is more likely to win.
@@ -44,22 +30,8 @@ def create_regression_labels(df):
     Small smoothing_factor Keeps the smoothed label close to the original.
     Larger smoothing_factor Provides stronger regularization.
     """
-    # score_diff = (df['team_1'] - df['team_0']).values.reshape(-1, 1)
-    # data_tran = ((df['team_1']) / (df['team_1'] + (df['team_0']))).values.reshape(-1, 1)
-    # smoothed_labels = df['team_1'] / (df['team_1'] + df['team_0'])
-    # data_tran = smoothed_labels.ewm(alpha=0.1, adjust=False).mean()
     smoothing_factor = 40
     data_tran = ((df['team_1']) + smoothing_factor) / (((df['team_1']) + df['team_0']) + 2 * smoothing_factor)
-    # for i in range(1,50):
-    #     smoothing_factor = i
-    #     data_tran = ((df['team_1']) + smoothing_factor) / (((df['team_1']) + df['team_0']) + 2 * smoothing_factor)
-    #     print(np.median(data_tran))
-    #     plt.hist(data_tran,bins=100, label=i)
-    # plt.legend()
-    # plt.hist(df['team_0'])
-    # plt.hist(df['team_1'])
-    # plt.hist(label_scaled,color='blue',alpha=0.5)
-    # plt.show()
     return data_tran
  
 def get_team_stats(team_mapping_df, conference_df, team_name, season, seed):
@@ -147,7 +119,7 @@ def predict_bracket(matchups, team_mapping_df, reg_season, conference_df, final_
         else:
              matchups.append((left_list[0][0],right_list[0][0],left_list[0][1],right_list[0][1]))
         #save round data
-        with open(f'results/{region}_round_{round_val}.txt', 'w') as file:
+        with open(f'results/{region}_round_{round_val}_down.txt', 'w') as file:
                 for matchup in matchups:
                     file.write(f"{matchup[0]} vs {matchup[1]}\n")
         round_val += 1
@@ -173,7 +145,7 @@ def predict_bracket(matchups, team_mapping_df, reg_season, conference_df, final_
 
     team_1_pred = final_model.predict(curr_matchup.to_numpy())[0]
     (winner_region, seed_region) = (matchups[0][0], matchups[0][2]) if team_1_pred > (0.5 + ERROR_CORRECTION) else (matchups[0][1], matchups[0][3])
-    with open(f'results/{region}_winner.txt', 'w') as file:
+    with open(f'results/{region}_winner_down.txt', 'w') as file:
         for matchup in matchups:
             file.write(f"{winner_region}\n")
     return (winner_region, seed_region)
@@ -270,7 +242,7 @@ def main():
         final_dataset = pd.read_csv('ncaadata/training_data.csv')
 
     #ML analysis
-    if not os.path.exists('models/regression_model.joblib'):
+    if not os.path.exists('models/regression_model_down.joblib'):
         df_swapped = utils.swap_team_features(final_dataset)
         #create regression labels
         # #create one hot encoded data
@@ -284,30 +256,36 @@ def main():
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
         to_drop = [column for column in upper.columns if any(upper[column] > 0.85)]
         X_filtered = X.drop(columns=to_drop)
-        X_filtered.columns.to_series().to_csv('ncaadata/selected_features.csv', index=False)
+        X_filtered.columns.to_series().to_csv('ncaadata/selected_features_down.csv', index=False)
         features_kept = X_filtered.columns.tolist()
         print(f'number of features after removal of correlated features: {X_filtered.shape[1]}')
         plt.figure(figsize=(12, 10))
         sns.heatmap(corr_matrix, cmap='plasma', annot=False, fmt=".2f", linewidths=0.5)
         plt.title("Feature Correlation Heatmap")
-        plt.savefig('figures/correlations.png')
+        plt.savefig('figures/correlations_down.png')
         plt.close()
 
-        X_train, X_test, y_train, y_test = train_test_split(X_filtered, y, test_size=0.2)
+        print(features_kept)
 
-        # #dumb
-        # y_train = np.argmax(y_train, axis=1)
-        # y_test = np.argmax(y_test, axis=1)
+        #add noise to the seed features
+        np.random.seed(42) 
+        noise_scale = 15
+        X_filtered['seed_team_0'] += np.random.normal(0, noise_scale, X_filtered['seed_team_0'].shape)
+        X_filtered['seed_team_1'] += np.random.normal(0, noise_scale, X_filtered['seed_team_1'].shape)
+        X_filtered['seed_diff'] += np.random.normal(0, noise_scale, X_filtered['seed_diff'].shape)
+        X_train, X_test, y_train, y_test = train_test_split(X_filtered, y, test_size=0.2)
 
         def objective(trial):
             params = {
                 "objective": "reg:squarederror",
                 "eval_metric": "rmse",
+                "lambda": 30,       #L2 regularization (default is 1)
+                "alpha": 30,        #L1 regularization (default is 0)
                 "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3),
                 "max_depth": trial.suggest_int("max_depth", 3, 10),
                 "n_estimators": trial.suggest_int("n_estimators", 50, 500),
                 "subsample": trial.suggest_float("subsample", 0.6, 1.0),
-                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.8, 1.0),
                 "lambda": trial.suggest_float("lambda", 1e-3, 10.0),
                 "alpha": trial.suggest_float("alpha", 1e-3, 10.0),
                 "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
@@ -319,7 +297,7 @@ def main():
             return -np.mean(scores)
         
         study = optuna.create_study(direction="minimize")
-        study.optimize(objective, n_trials=75)
+        study.optimize(objective, n_trials=40)
 
         best_params = study.best_trial.params
         final_model = xgb.XGBRegressor(**best_params,early_stopping_rounds=6)
@@ -327,14 +305,14 @@ def main():
         final_model.fit(X_train, y_train, eval_set=[(X_train, y_train), (X_test, y_test)], 
                         verbose=True)
         os.makedirs('models',exist_ok=True)
-        joblib.dump(final_model,'models/regression_model.joblib')
+        joblib.dump(final_model,'models/regression_model_down.joblib')
         results = final_model.evals_result()
         # Evaluate model
         y_pred = final_model.predict(X_test)
         final_acc = mean_absolute_error(y_test, y_pred)
 
         print(f"Final MAE: {final_acc:.4f}")
-        with open(f'models/no_corr_model_final_rmse.txt','w') as f:
+        with open(f'models/no_corr_model_final_rmse_down.txt','w') as f:
             f.write(f'{final_acc}')
 
         train_loss = results['validation_0']['rmse']
@@ -348,7 +326,7 @@ def main():
         plt.title('Training and Validation rmse over Epochs')
         plt.legend()
         os.makedirs('figures',exist_ok=True)
-        plt.savefig('figures/training_curve.png')
+        plt.savefig('figures/training_curve_down.png')
 
         #feature importance
         importance = final_model.get_booster().get_score(importance_type="weight")
@@ -361,11 +339,11 @@ def main():
         plt.ylabel("Features")
         #highest on top
         plt.gca().invert_yaxis()
-        plt.savefig('figures/feature_importance.png', bbox_inches='tight')
+        plt.savefig('figures/feature_importance_down.png', bbox_inches='tight')
         plt.close()
     else:
-        final_model = joblib.load('models/regression_model.joblib')
-        features_kept = pd.read_csv('ncaadata/selected_features.csv')
+        final_model = joblib.load('models/regression_model_down.joblib')
+        features_kept = pd.read_csv('ncaadata/selected_features_down.csv')
         features_kept = features_kept[features_kept.columns[0]].tolist()
 
 
